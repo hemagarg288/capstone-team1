@@ -16,7 +16,7 @@ pipeline {
 
         stage('Wait for Deployment') {
             steps {
-                sleep 10
+                sleep 30
             }
         }
 
