@@ -27,7 +27,7 @@ resource "local_file" "public_key" {
 }
 
 resource "aws_key_pair" "k8s_key" {
-  key_name   = "k8s_ssh_key"
+  key_name   = "demo2_k8s_ssh_key"
   public_key = tls_private_key.ssh_key.public_key_openssh
 }
 
@@ -40,16 +40,16 @@ variable "existing_vpc_id" {
 
 resource "aws_subnet" "k8s_subnet" {
   vpc_id     = var.existing_vpc_id
-  cidr_block = "172.31.50.0/25"
+  cidr_block = "172.31.51.0/25"
   map_public_ip_on_launch = true  # Enable Auto-Assign Public IP
 
   tags = {
-    Name = "demo-k8s-subnet"
+    Name = "demo2-k8s-subnet"
   }
 }
 
 resource "aws_security_group" "k8s_sg" {
-  name        = "durga_ssh"
+  name        = "demo2_ssh"
   description = "Allow SSH inbound traffic"
   vpc_id      = var.existing_vpc_id 
 
