@@ -1,0 +1,85 @@
+- name: Install Helm on Master Node
+  hosts: k8s_master
+  gather_facts: true
+  become: true
+  tasks:
+
+    - name: Install Docker Compose
+      apt:
+        name: docker-compose
+        state: present
+
+    - name: Verify Docker Compose installation
+      command: docker-compose --version
+      register: docker_compose_version
+
+    - debug:
+        var: docker_compose_version.stdout    
+    
+    
+    - name: Download get_helm.sh script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /root/get_helm.sh
+        mode: '0755'  # Set the file as executable directly
+
+    - name: Run get_helm.sh script
+      command: /root/get_helm.sh
+      args:
+        creates: /usr/local/bin/helm  # Prevents re-running if helm is already installed
+
+    - name: Check Helm version
+      command: helm version --short
+      register: helm_version_result
+
+    - name: Display Helm version
+      debug:
+        var: helm_version_result.stdout
+
+    - name: Install kubectl
+      apt:
+        name: kubectl
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create Argo CD namespace
+      command: kubectl create namespace argocd
+      register: create_namespace
+      ignore_errors: yes  # Ignore error if namespace already exists
+
+    - name: Install Argo CD
+      command: kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+      register: argocd_install
+
+
+    - name: Wait for Argo CD server to be ready
+      command: kubectl wait --for=condition=available --timeout=60s deployment/argocd-server -n argocd
+      register: argocd_wait
+      retries: 5
+      delay: 10
+      until: argocd_wait is succeeded
+
+    - name: Patch argocd-server service to change type to NodePort
+      shell: >
+        kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "NodePort"}}'
+      register: patch_result
+
+    - name: Run kubectl get all in the argocd namespace
+      shell: kubectl get all -n argocd
+      register: kubectl_output
+
+    - name: Display kubectl output
+      debug:
+        msg: "{{ kubectl_output.stdout }}"
+
+    - name: Get Argo CD server admin password
+      command: kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath='{.data.password}'
+      register: argocd_password_encoded
+
+    - name: Decode the password 
+      command: echo "{{ argocd_password_encoded.stdout }}" | base64 --decode
+      register: argocd_password
+
+    - name: Display Argo CD admin password
+      debug:
+         msg: "Argo CD admin password is: {{ argocd_password.stdout }}" 
