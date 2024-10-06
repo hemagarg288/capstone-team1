@@ -22,7 +22,7 @@ pipeline {
 
         stage('Run Ansible Playbook') {
             steps {
-                sh 'ansible-playbook -i /tmp/inv -u ubuntu -b --become-method sudo php.yaml'
+                sh 'ansible-playbook -i /root/terraform/inventory.ini install_kubernetes.yaml'
             }
         }
     }
