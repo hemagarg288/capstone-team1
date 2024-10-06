@@ -1,0 +1,209 @@
+- name: Install Latest Docker and Kubernetes with Calico
+  hosts: all
+  gather_facts: true
+  become: true  
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+   
+    - name: Update the apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Enable Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+        
+    - name: Download cri-dockerd packages
+      get_url:
+        url: https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.14/cri-dockerd-0.3.14.amd64.tgz
+        dest: /root/cri-dockerd-0.3.14.amd64.tgz
+        
+    - name: Download cri-dockerd systemd packages
+      get_url:
+        url: https://github.com/Mirantis/cri-dockerd/archive/refs/tags/v0.3.14.tar.gz
+        dest: /root/v0.3.14.tar.gz
+
+    - name: Ensure the target directory exists
+      file:
+        path: /root/crisoc/
+        state: directory
+
+    - name: Extract cri-dockerd tar file
+      unarchive:
+        src: /root/cri-dockerd-0.3.14.amd64.tgz  # Path to the downloaded tar file
+        dest: /root/crisoc  # Where to extract
+        remote_src: yes  # Indicates that the src file is already on the remote machine
+
+    - name: Install cri-dockerd
+      command: sudo install -o root -g root -m 0755 /root/crisoc/cri-dockerd/cri-dockerd /usr/local/bin/cri-dockerd
+
+    - name: Extract cri-dockerd systemd tar file
+      unarchive:
+        src: /root/v0.3.14.tar.gz  # Path to the downloaded tar file
+        dest: /root/crisoc  # Where to extract
+        remote_src: yes  # Indicates that the src file is already on the remote machine
+    
+
+    - name: Copy systemd service files
+      copy:
+        src: /root/crisoc/cri-dockerd-0.3.14/packaging/systemd/
+        dest: /etc/systemd/system/
+        remote_src: yes  # Indicates that the source is already on the remote machine
+ 
+    - name: Set up cri-dockerd systemd service
+      # shell:  sudo cp /root/crisoc/cri-dockerd-0.3.14/packaging/systemd/* /etc/systemd/system
+      command: sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service
+
+
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable and start cri-dockerd service
+      shell: |
+        sudo systemctl enable --now cri-docker.socket
+        sudo systemctl enable cri-docker
+        sudo systemctl start cri-docker
+        sudo systemctl status cri-docker
+
+  
+    - name: Ensure /etc/apt/keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      become: yes
+
+    - name: Add Kubernetes GPG key and overwrite if necessary
+      shell: curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      become: yes
+            
+    - name: Add Kubernetes repository to sources list
+      shell: echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Update apt repository again
+      apt:
+        update_cache: yes
+
+    - name: Install Kubernetes components
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+
+    - name: Hold Kubernetes components at current version
+      command: apt-mark hold kubelet kubeadm kubectl
+    
+    - name: Enable net.bridge.bridge-nf-call-iptables
+      command: sysctl -w net.bridge.bridge-nf-call-iptables=1
+
+    - name: Create kubeadm configuration file
+      copy:
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: "{{ hostvars[groups['k8s_master'][0]].ansible_default_ipv4.address }}"
+            bindPort: 6443
+          nodeRegistration:
+            criSocket: unix:///var/run/cri-dockerd.sock
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: ClusterConfiguration
+          networking:
+            podSubnet: 192.168.0.0/16
+        dest: /root/kubeadm-config.yaml
+        owner: root
+        group: root
+        mode: '0644'
+  
+    - name: Initialize Kubernetes cluster
+      command: kubeadm init --config=/root/kubeadm-config.yaml
+      register: kubeadm_output
+      when: inventory_hostname == groups['k8s_master'][0]
+
+    - name: Write kubeadm output to file
+      copy:
+        content: "{{ kubeadm_output.stdout }}"
+        dest: /root/cluster_initialized.txt
+      when: inventory_hostname == groups['k8s_master'][0]
+
+    - name: Read the kubeadm join command from file
+      slurp:
+        src: /root/cluster_initialized.txt
+      register: kubeadm_join_file
+      when: inventory_hostname == groups['k8s_master'][0]
+
+    - name: Convert file content from base64 to text
+      set_fact:
+        kubeadm_join_command: "{{ kubeadm_join_file.content | b64decode }}"
+      when: inventory_hostname == groups['k8s_master'][0]
+
+    - name: Extract the token from the kubeadm join command
+      set_fact:
+        kubeadm_token: "{{ (kubeadm_join_command | regex_search('--token ([a-zA-Z0-9\\.\\-]+)', '\\1')) | first }}"
+      when: kubeadm_join_command is defined and inventory_hostname == groups['k8s_master'][0]
+
+    - name: Extract the hash from the kubeadm join command
+      set_fact:
+        kubeadm_cert_hash: "{{ (kubeadm_join_command | regex_search('--discovery-token-ca-cert-hash sha256:([a-f0-9]+)', '\\1')) | first }}"
+      when: kubeadm_join_command is defined and inventory_hostname == groups['k8s_master'][0]
+
+    - name: Debug the extracted token and hash
+      debug:
+        msg: "Extracted Token: {{ kubeadm_token }}, Extracted Cert Hash: sha256:{{ kubeadm_cert_hash }}"
+      when: kubeadm_token is defined and kubeadm_cert_hash and inventory_hostname == groups['k8s_master'][0]
+
+    - name: Set up kubectl for the regular user
+      block:
+        - name: Create .kube directory
+          file:
+            path: ~/.kube
+            state: directory
+            mode: '0755'
+          when: inventory_hostname == groups['k8s_master'][0]
+
+
+        - name: Copy admin.conf to .kube/config
+          command: cp -i /etc/kubernetes/admin.conf ~/.kube/config
+          when: inventory_hostname == groups['k8s_master'][0]
+          #args:
+            #removes: ~/.kube/config
+
+        - name: Change ownership of .kube/config
+          shell: chown $(id -u):$(id -g) ~/.kube/config
+          when: inventory_hostname == groups['k8s_master'][0]
+
+
+    - name: Install Calico Pod Network Add-On
+      command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+      when: inventory_hostname == groups['k8s_master'][0]
+
+    - name: Join worker nodes to the cluster
+      command: kubeadm join {{ hostvars[groups['k8s_master'][0]].inventory_hostname }}:6443 --token {{ hostvars[groups['k8s_master'][0]].kubeadm_token }} --discovery-token-ca-cert-hash sha256:{{ hostvars[groups['k8s_master'][0]].kubeadm_cert_hash }} --cri-socket unix:///var/run/cri-dockerd.sock
+      #command: kubeadm join {{ hostvars[groups['k8s_master'][0]].inventory_hostname }}:6443 --token {{ kubeadm_token }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_cert_hash }} --cri-socket unix:///var/run/cri-dockerd.sock
+      when: inventory_hostname in groups['k8s_worker']
+    
+  post_tasks:
+    - name: Show nodes in the cluster
+      command: kubectl get nodes
+      when: inventory_hostname == groups['k8s_master'][0]
