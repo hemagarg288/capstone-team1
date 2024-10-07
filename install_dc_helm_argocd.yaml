@@ -1,4 +1,4 @@
-- name: Install Helm on Master Node
+- name: Install Docker Compose, Helm and ArgoCD on Master Node
   hosts: k8s_master
   gather_facts: true
   become: true
