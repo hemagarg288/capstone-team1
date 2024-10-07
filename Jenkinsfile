@@ -1,6 +1,7 @@
 pipeline {
     agent any
 
+    stages {
         stage('Run Ansible Playbook to install kubernetes') {
             steps {
                 sh 'ansible-playbook -i /root/terraform/inventory.ini install_kubernetes.yaml'
