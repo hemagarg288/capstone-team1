@@ -45,7 +45,7 @@ resource "local_file" "public_key" {
 }
 
 resource "aws_key_pair" "k8s_key" {
-  key_name   = "k8s_team1_key1"
+  key_name   = "k8s_team1_key2"
   public_key = tls_private_key.ssh_key.public_key_openssh
 }
 
@@ -58,16 +58,16 @@ variable "existing_vpc_id" {
 
 resource "aws_subnet" "k8s_subnet" {
   vpc_id     = var.existing_vpc_id
-  cidr_block = "10.0.4.0/32"
+  cidr_block = "10.0.0.0/32"
   map_public_ip_on_launch = true  # Enable Auto-Assign Public IP
 
   tags = {
-    Name = "k8s-team1-subnet1"
+    Name = "k8s-team1-subnet2"
   }
 }
 
 resource "aws_security_group" "k8s_sg" {
-  name        = "team1_sg_ssh2"
+  name        = "team1_sg_ssh3"
   description = "Allow SSH inbound traffic"
   vpc_id      = var.existing_vpc_id 
 
@@ -110,7 +110,7 @@ resource "aws_security_group" "k8s_sg" {
 # Add more ingress rules as necessary for your setup
 
   tags = {
-    Name = "team1-k8s-sg2"
+    Name = "team1-k8s-sg3"
   }
 } 
 
